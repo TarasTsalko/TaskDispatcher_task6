@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
 
+#include "../test_utils.hpp"
 #include "queue/bounded_queue.hpp"
 
 #include <thread>
 
 using namespace dispatcher::queue;
+using namespace test_utils;
 
 class BoundedQueueTest : public ::testing::Test {
 protected:
@@ -17,17 +19,32 @@ protected:
     std::unique_ptr<BoundedQueue> queue;
 };
 
-class Adder {
-public:
-    Adder(std::atomic<int> &init_val) : count_(init_val) {}
-    Adder(const Adder &other) : count_(other.count_) {}
-    void operator()() { ++count_; }
-
-private:
-    std::atomic<int> &count_;
-};
-
 TEST_F(BoundedQueueTest, EmptyQueue) { ASSERT_EQ(queue->try_pop().has_value(), false); }
+
+// Многопоточный тест для проверки пустой очереди
+TEST_F(BoundedQueueTest, MultiThreadedEmptyQueue) {
+    const int num_threads = 10;  // Количество потоков
+    std::vector<std::thread> threads;
+    std::atomic<bool> test_result = true;
+
+    // Функция для выполнения в каждом потоке
+    auto thread_func = [this, &test_result]() {
+        if (queue->try_pop().has_value()) {
+            test_result = false;  // Если значение есть, тест не пройден
+        }
+    };
+
+    // Создаем и запускаем потоки
+    for (int i = 0; i < num_threads; ++i) {
+        threads.emplace_back(thread_func);
+    }
+
+    // Ждем завершения всех потоков
+    Join(threads);
+
+    // Проверяем результат
+    ASSERT_TRUE(test_result);
+}
 
 TEST_F(BoundedQueueTest, MultiThreadTest) {
     const int num_tasks = 100;
@@ -43,8 +60,8 @@ TEST_F(BoundedQueueTest, MultiThreadTest) {
         producers.emplace_back([&]() { queue->push(adder); });
     }
 
-    for (auto &t : producers)
-        t.join();
+    // Ожидаем завершение работы производителей
+    Join(producers);
 
     // Запускаем потребителей
     for (int i = 0; i < num_tasks; ++i) {
@@ -55,10 +72,8 @@ TEST_F(BoundedQueueTest, MultiThreadTest) {
         });
     }
 
-    // Ожидааем завершения рааботы потребителей
-    for (auto &t : consumers)
-        t.join();
-
+    // Ожидаем завершения рааботы потребителей
+    Join(consumers);
     EXPECT_EQ(counter, num_tasks);
 }
 
@@ -97,6 +112,9 @@ TEST_F(BoundedQueueTest, RemoveElementsMultiThread) {
         });
     }
 
+    // Ждем завершения всех потоков
+    Join(producers);
+
     // Запускаем потребителей
     for (int i = 0; i < num_consumers; ++i) {
         consumers.emplace_back([this]() {
@@ -107,13 +125,8 @@ TEST_F(BoundedQueueTest, RemoveElementsMultiThread) {
         });
     }
 
-    // Ждем завершения всех потоков
-    for (auto &t : producers) {
-        t.join();
-    }
-    for (auto &t : consumers) {
-        t.join();
-    }
+    // Ожидаем завершения рааботы потребителей
+    Join(consumers);
 
     // Проверяем состояние очереди
     // После всех операций очередь должна быть пустой

@@ -1,6 +1,7 @@
 set(target dispatcher_test)
 
 add_executable(${target}
+    test_utils.hpp
     task_dispatcher.cpp
 )
 
