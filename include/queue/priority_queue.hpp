@@ -1,9 +1,9 @@
 #pragma once
-#include "queue/bounded_queue.hpp"
-#include "queue/unbounded_queue.hpp"
+#include "queue.hpp"
 #include "types.hpp"
 
 #include <atomic>
+#include <condition_variable>
 #include <limits>
 #include <map>
 #include <memory>
@@ -17,7 +17,8 @@ namespace dispatcher::queue {
 class PriorityQueue {
     // здесь ваш код
 public:
-    // explicit PriorityQueue(?);
+    explicit PriorityQueue(const QueueOptions &highPriorityOption = {true, 1000},
+                           const QueueOptions &normalPriorityOption = {false, 0});
 
     void push(TaskPriority priority, std::function<void()> task);
     // block on pop until shutdown is called
@@ -27,6 +28,13 @@ public:
     void shutdown();
 
     ~PriorityQueue();
+
+private:
+    std::unique_ptr<IQueue> highPriorityQueue_;
+    std::unique_ptr<IQueue> normalPriorityQueue_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool shutdown_ = false;
 };
 
 }  // namespace dispatcher::queue
