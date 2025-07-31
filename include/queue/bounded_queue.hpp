@@ -16,13 +16,14 @@ public:
 
     std::optional<std::function<void()>> try_pop() override;
 
-    ~BoundedQueue() override = default;
+    ~BoundedQueue() override;
 
 private:
     int capacity_;                             // Максимальная емкость
     std::queue<std::function<void()>> queue_;  // Внутренняя очередь
     std::mutex mutex_;                         // Мьютекс для синхронизации
     std::condition_variable not_full_;         // Условие не полной очереди
+    bool isActive_ = true;
 };
 
 }  // namespace dispatcher::queue
