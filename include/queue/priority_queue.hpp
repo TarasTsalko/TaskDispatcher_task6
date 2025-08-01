@@ -17,8 +17,7 @@ namespace dispatcher::queue {
 class PriorityQueue {
     // здесь ваш код
 public:
-    explicit PriorityQueue(const QueueOptions &highPriorityOption = {true, 1000},
-                           const QueueOptions &normalPriorityOption = {false, 0});
+    explicit PriorityQueue(const QueueOptions &highPriorityOption, const QueueOptions &normalPriorityOption);
 
     void push(TaskPriority priority, std::function<void()> task);
     // block on pop until shutdown is called
