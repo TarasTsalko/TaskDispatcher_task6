@@ -22,12 +22,14 @@ TEST_F(UnboundedQueueTest, EmptyQueue) { ASSERT_EQ(queue->try_pop().has_value(),
 TEST_F(UnboundedQueueTest, MultiThreadedEmptyQueue) {
     const int num_threads = 10;
     std::vector<std::thread> threads;
-    std::atomic<bool> test_result = true;
+    std::atomic<bool> test_result{true};  // Инициализируем атомарный флаг
 
     // Функция для выполнения в каждом потоке
     auto thread_func = [this, &test_result]() {
+        // Используем acquire семантику при чтении результата
         if (queue->try_pop().has_value()) {
-            test_result = false;  // Если значение есть, тест не пройден
+            // Устанавливаем результат с release семантикой
+            test_result.store(false, std::memory_order_release);
         }
     };
 
@@ -39,8 +41,8 @@ TEST_F(UnboundedQueueTest, MultiThreadedEmptyQueue) {
     // Ждем завершения всех потоков
     Join(threads);
 
-    // Проверяем результат
-    ASSERT_TRUE(test_result);
+    // Читаем результат с acquire семантикой
+    ASSERT_TRUE(test_result.load(std::memory_order_acquire)) << "One or more threads found a value in an empty queue";
 }
 
 TEST_F(UnboundedQueueTest, MultiThreadTest) {

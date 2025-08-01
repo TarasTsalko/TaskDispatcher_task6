@@ -18,15 +18,15 @@ std::optional<std::function<void()>> BoundedQueue::try_pop() {
 void BoundedQueue::push(std::function<void()> task) {
     std::unique_lock<std::mutex> lock(mutex_);
     // Ждем, пока появится место в очереди
-    not_full_.wait(lock, [this] { return queue_.size() < capacity_ || !isActive_; });
+    not_full_.wait(lock, [this] { return queue_.size() < capacity_ || !isActive_.load(std::memory_order_acquire); });
 
-    if (!isActive_)
+    if (!isActive_.load(std::memory_order_acquire))
         return;
     queue_.push(std::move(task));
 }
 
 BoundedQueue::~BoundedQueue() {
-    isActive_ = false;
+    isActive_.store(false, std::memory_order_release);
     not_full_.notify_all();
 }
 

@@ -25,7 +25,7 @@ PriorityQueue::PriorityQueue(const QueueOptions &highPriorityOption, const Queue
 void PriorityQueue::push(TaskPriority priority, std::function<void()> task) {
     std::unique_lock<std::mutex> lock(mutex_);
 
-    if (shutdown_)
+    if (shutdown_.load(std::memory_order_acquire))
         return;
 
     if (priority == TaskPriority::High)
@@ -49,7 +49,7 @@ std::optional<std::function<void()>> PriorityQueue::pop() {
         if (normalPriorityTask.has_value())
             return true;
 
-        return shutdown_;
+        return shutdown_.load(std::memory_order_acquire);
     });
 
     if (highPriorityTask.has_value())
@@ -63,9 +63,9 @@ std::optional<std::function<void()>> PriorityQueue::pop() {
 
 void PriorityQueue::shutdown() {
     std::unique_lock<std::mutex> lock(mutex_);
-    if (shutdown_)
+    if (shutdown_.load(std::memory_order_acquire))
         return;
-    shutdown_ = true;
+    shutdown_.store(true, std::memory_order_release);
     cv_.notify_all();
 }
 

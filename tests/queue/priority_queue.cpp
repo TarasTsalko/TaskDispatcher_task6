@@ -13,42 +13,57 @@ using namespace test_utils;
 TEST(PriorityQueueTest, BasicFunctionality) {
     PriorityQueue queue;
     std::atomic<int> counter(0);
-    Adder Adder(counter);
+    Adder adder(counter);
     ResetHandler resetHandler(counter);
 
-    queue.push(TaskPriority::High, Adder);
-    queue.push(TaskPriority::High, Adder);
+    // Используем acquire семантику при чтении счетчика
+    ASSERT_EQ(counter.load(std::memory_order_acquire), 0);
+
+    // Добавляем задачи
+    queue.push(TaskPriority::High, adder);
+    queue.push(TaskPriority::High, adder);
     queue.push(TaskPriority::Normal, resetHandler);
 
+    // Обрабатываем задачи с высоким приоритетом
     std::invoke(queue.pop().value());
     std::invoke(queue.pop().value());
-    ASSERT_EQ(counter, 2);
 
+    ASSERT_EQ(counter.load(std::memory_order_acquire), 2);
+
+    // Обрабатываем задачу с нормальным приоритетом
     std::invoke(queue.pop().value());
-    ASSERT_EQ(counter, 0);
+
+    ASSERT_EQ(counter.load(std::memory_order_acquire), 0);
+
+    // Завершаем работу очереди
     queue.shutdown();
+
+    // Проверяем, что очередь пуста
     ASSERT_EQ(queue.pop(), std::nullopt);
 }
 
 TEST(PriorityQueueTest, BlockingOnEmptyQueue) {
     PriorityQueue queue;
-    std::atomic<bool> task_executed(false);
+    std::atomic<bool> task_executed{false};
 
     // Создаем поток, который будет ждать задачу
     std::thread worker([&]() {
         auto task = queue.pop();
         if (task.has_value()) {
             std::invoke(task.value());
-            task_executed = true;
+            task_executed.store(true, std::memory_order_release);
         }
     });
 
     // Ждем, чтобы убедиться, что поток заблокировался
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    const int timeout = 1;
+    std::this_thread::sleep_for(std::chrono::seconds(timeout));
 
-    queue.push(TaskPriority::Normal, [&]() { task_executed = true; });
+    queue.push(TaskPriority::Normal, [&]() { task_executed.store(true, std::memory_order_release); });
+
     worker.join();
-    ASSERT_TRUE(task_executed);
+
+    ASSERT_TRUE(task_executed.load(std::memory_order_acquire)) << "Task was not executed";
 }
 
 TEST(PriorityQueueTest, MultiThreadedPriorityOrder) {
@@ -56,22 +71,27 @@ TEST(PriorityQueueTest, MultiThreadedPriorityOrder) {
         std::exception_ptr eptr;
         PriorityQueue queue;
         std::atomic<int> counter(0);
-        std::atomic<bool> highPriorityExecuted(false);
-        std::atomic<bool> resetExecuted(false);
+        std::atomic<bool> highPriorityExecuted{false};
+        std::atomic<bool> resetExecuted{false};
 
         // Модифицируем Adder для установки флага после выполнения
         auto adder = [&counter, &highPriorityExecuted]() {
             counter++;
-            highPriorityExecuted = true;
+            // Используем release семантику при установке флага
+            highPriorityExecuted.store(true, std::memory_order_release);
         };
 
         // ResetHandler с собственным флагом
         auto resetHandler = [&counter, &resetExecuted, &highPriorityExecuted, &eptr]() {
             try {
-                if (!highPriorityExecuted && counter != 1)
+                // Используем acquire семантику при чтении флагов
+                if (!highPriorityExecuted.load(std::memory_order_acquire) &&
+                    counter.load(std::memory_order_acquire) != 1)
                     throw std::runtime_error("Priority execution error");
+
                 counter = 0;
-                resetExecuted = true;
+                // Устанавливаем флаг с release семантикой
+                resetExecuted.store(true, std::memory_order_release);
             } catch (...) {
                 // Сохраняем исключение
                 eptr = std::current_exception();
@@ -110,16 +130,14 @@ TEST(PriorityQueueTest, MultiThreadedPriorityOrder) {
         if (eptr)
             std::rethrow_exception(eptr);
 
-        ASSERT_TRUE(resetExecuted);
+        ASSERT_TRUE(resetExecuted.load(std::memory_order_acquire)) << "Reset handler was not executed";
 
-        // Проверяем итоговое значение счетчика
-        ASSERT_EQ(counter, 0);  // После resetHandler
+        ASSERT_EQ(counter.load(std::memory_order_acquire), 0) << "Counter is not zero after reset";
 
-        // Проверяем, что все задачи были выполнены
         ASSERT_EQ(queue.pop(), std::nullopt);
     } catch (const std::runtime_error &ex) {
         EXPECT_EQ(std::string_view("Priority execution error"), ex.what());
-        EXPECT_FALSE(true);
+        FAIL();
     }
 }
 

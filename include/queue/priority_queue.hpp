@@ -34,7 +34,7 @@ private:
     std::unique_ptr<IQueue> normalPriorityQueue_;
     std::mutex mutex_;
     std::condition_variable cv_;
-    bool shutdown_ = false;
+    std::atomic<bool> shutdown_{false};
 };
 
 }  // namespace dispatcher::queue

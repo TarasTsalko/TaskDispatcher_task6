@@ -23,7 +23,7 @@ TEST_F(TaskDispatcherTest, MultipleTasksExecution) {
     // Переменные для отслеживания завершения
     std::condition_variable cv;
     std::mutex m;
-    bool allTasksCompleted = false;
+    std::atomic<bool> allTasksCompleted{false};  // Делаем атомарным
 
     // Планируем несколько задач с разным приоритетом
     for (int i = 0; i < 5; ++i) {
@@ -42,16 +42,17 @@ TEST_F(TaskDispatcherTest, MultipleTasksExecution) {
     // Добавляем специальную задачу завершения
     dispatcher_->schedule(TaskPriority::High, [&]() {
         std::lock_guard<std::mutex> lock(m);
-        allTasksCompleted = true;
+        allTasksCompleted.store(true, std::memory_order_release);  // Используем release
         cv.notify_one();
     });
 
     // Ждем выполнения всех задач с таймаутом
     {
         std::unique_lock<std::mutex> lock(m);
-        //
         const int timeout = 20;
-        const bool success = cv.wait_for(lock, std::chrono::seconds(timeout), [&]() { return allTasksCompleted; });
+        const bool success = cv.wait_for(lock, std::chrono::seconds(timeout), [&]() {
+            return allTasksCompleted.load(std::memory_order_acquire);  // Используем acquire
+        });
 
         EXPECT_TRUE(success) << "Tasks did not complete within the allotted time";
     }
@@ -60,12 +61,12 @@ TEST_F(TaskDispatcherTest, MultipleTasksExecution) {
     EXPECT_EQ(counter, 5) << "Incorrect number of operations performed";
 
     // Дополнительная проверка состояния
-    EXPECT_TRUE(allTasksCompleted) << "Not all tasks were completed";
+    EXPECT_TRUE(allTasksCompleted.load(std::memory_order_acquire)) << "Not all tasks were completed";
 }
 
 TEST_F(TaskDispatcherTest, ShutdownTest) {
     std::atomic<int> task_counter = 0;
-    std::atomic<bool> shutdown_flag = false;
+    std::atomic<bool> shutdown_flag{false};  // Инициализируем атомарный флаг
 
     // Переменные для отслеживания начала выполнения задач
     std::condition_variable task_start_cv;
@@ -88,7 +89,7 @@ TEST_F(TaskDispatcherTest, ShutdownTest) {
             task_counter++;
 
             // Проверяем, что shutdown не произошел во время выполнения
-            EXPECT_FALSE(shutdown_flag.load());
+            EXPECT_FALSE(shutdown_flag.load(std::memory_order_acquire));
         });
     }
 
@@ -106,23 +107,24 @@ TEST_F(TaskDispatcherTest, ShutdownTest) {
     {
         std::condition_variable completion_cv;
         std::mutex completion_m;
-        bool all_tasks_completed = false;
+        std::atomic<bool> all_tasks_completed{false};  // Используем атомарный флаг
 
         // Добавляем задачу проверки завершения
         dispatcher_->schedule(TaskPriority::High, [&]() {
             // Ждем, пока все задачи завершатся
-            while (task_counter.load() < total_tasks) {
+            while (task_counter.load(std::memory_order_acquire) < total_tasks) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
 
             std::lock_guard<std::mutex> lock(completion_m);
-            all_tasks_completed = true;
+            all_tasks_completed.store(true, std::memory_order_release);
             completion_cv.notify_one();
         });
 
         // Ждем завершения всех задач с таймаутом
         std::unique_lock<std::mutex> lock(completion_m);
-        bool success = completion_cv.wait_for(lock, std::chrono::seconds(20), [&]() { return all_tasks_completed; });
+        bool success = completion_cv.wait_for(lock, std::chrono::seconds(20),
+                                              [&]() { return all_tasks_completed.load(std::memory_order_acquire); });
 
         EXPECT_TRUE(success) << "Tasks did not complete within the time limit";
     }
@@ -130,13 +132,13 @@ TEST_F(TaskDispatcherTest, ShutdownTest) {
     // Теперь можно безопасно выполнить shutdown
     {
         std::unique_ptr<TaskDispatcher> local_dispatcher = std::move(dispatcher_);
-        shutdown_flag = true;
+        shutdown_flag.store(true, std::memory_order_release);
     }
 
     // Проверяем, что все задачи были выполнены
     EXPECT_EQ(task_counter, total_tasks) << "Not all tasks were executed";
 
     // Проверяем, что флаг shutdown установлен
-    EXPECT_TRUE(shutdown_flag) << "Shutdown flag was not set";
+    EXPECT_TRUE(shutdown_flag.load(std::memory_order_acquire)) << "Shutdown flag was not set";
 }
 // здесь ваш код

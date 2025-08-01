@@ -1,6 +1,7 @@
 #pragma once
 #include "queue/queue.hpp"
 
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <queue>
@@ -23,7 +24,7 @@ private:
     std::queue<std::function<void()>> queue_;  // Внутренняя очередь
     std::mutex mutex_;                         // Мьютекс для синхронизации
     std::condition_variable not_full_;         // Условие не полной очереди
-    bool isActive_ = true;
+    std::atomic<bool> isActive_{true};
 };
 
 }  // namespace dispatcher::queue
