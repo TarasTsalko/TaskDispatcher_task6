@@ -25,12 +25,14 @@ TEST_F(BoundedQueueTest, EmptyQueue) { ASSERT_EQ(queue->try_pop().has_value(), f
 TEST_F(BoundedQueueTest, MultiThreadedEmptyQueue) {
     const int num_threads = 10;  // Количество потоков
     std::vector<std::thread> threads;
-    std::atomic<bool> test_result = true;
+    std::atomic<bool> test_result{true};  // Инициализируем атомарный флаг
 
     // Функция для выполнения в каждом потоке
     auto thread_func = [this, &test_result]() {
+        // Используем acquire семантику при чтении результата
         if (queue->try_pop().has_value()) {
-            test_result = false;  // Если значение есть, тест не пройден
+            // Устанавливаем результат с release семантикой
+            test_result.store(false, std::memory_order_release);
         }
     };
 
@@ -42,22 +44,24 @@ TEST_F(BoundedQueueTest, MultiThreadedEmptyQueue) {
     // Ждем завершения всех потоков
     Join(threads);
 
-    // Проверяем результат
-    ASSERT_TRUE(test_result);
+    ASSERT_TRUE(test_result.load(std::memory_order_acquire)) << "One or more threads found a value in an empty queue";
 }
 
 TEST_F(BoundedQueueTest, MultiThreadTest) {
     const int num_tasks = 100;
     std::atomic<int> counter = 0;
     Adder adder(counter);
+
     // Создаем потоки
     std::vector<std::thread> producers;
     std::vector<std::thread> consumers;
 
+    // Добавляем атомарный флаг для отслеживания завершения
+    std::atomic<bool> all_tasks_completed{false};
+
     // Запускаем производителей
     for (int i = 0; i < num_tasks; ++i) {
-        // push создает коппию adder
-        producers.emplace_back([&]() { queue->push(adder); });
+        producers.emplace_back([&, adder]() { queue->push(adder); });
     }
 
     // Ожидаем завершение работы производителей
@@ -65,16 +69,27 @@ TEST_F(BoundedQueueTest, MultiThreadTest) {
 
     // Запускаем потребителей
     for (int i = 0; i < num_tasks; ++i) {
-        consumers.emplace_back([&]() {
+        consumers.emplace_back([&, i]() {
             const auto task = queue->try_pop();
-            if (task.has_value())
+            if (task.has_value()) {
                 std::invoke(task.value());
+
+                // Проверяем, что все задачи выполнены
+                if (i == num_tasks - 1) {
+                    // Используем release семантику
+                    all_tasks_completed.store(true, std::memory_order_release);
+                }
+            }
         });
     }
 
-    // Ожидаем завершения рааботы потребителей
+    // Ожидаем завершения работы потребителей
     Join(consumers);
-    EXPECT_EQ(counter, num_tasks);
+
+    ASSERT_TRUE(all_tasks_completed.load(std::memory_order_acquire)) << "Not all tasks were completed";
+
+    // Проверяем счетчик
+    EXPECT_EQ(counter.load(std::memory_order_acquire), num_tasks) << "Incorrect number of operations performed";
 }
 
 // Тест на удаление элементов
@@ -125,7 +140,7 @@ TEST_F(BoundedQueueTest, RemoveElementsMultiThread) {
         });
     }
 
-    // Ожидаем завершения рааботы потребителей
+    // Ожидаем завершения работы потребителей
     Join(consumers);
 
     // Проверяем состояние очереди
