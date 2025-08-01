@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <exception>
 #include <limits>
 #include <map>
 #include <memory>
@@ -26,6 +27,9 @@ public:
 
     void shutdown();
 
+    // Метод для получения исключения в другом потоке
+    [[nodiscard]] std::exception_ptr GetAndClearException();
+
     ~PriorityQueue();
 
 private:
@@ -34,6 +38,7 @@ private:
     std::mutex mutex_;
     std::condition_variable cv_;
     std::atomic<bool> shutdown_{false};
+    std::exception_ptr exception_ = nullptr;
 };
 
 }  // namespace dispatcher::queue

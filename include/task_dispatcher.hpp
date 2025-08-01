@@ -1,10 +1,11 @@
 #pragma once
 
-#include <memory>
-
 #include "queue/priority_queue.hpp"
 #include "thread_pool/thread_pool.hpp"
 #include "types.hpp"
+
+#include <exception>
+#include <memory>
 
 namespace dispatcher {
 
@@ -16,11 +17,13 @@ public:
 
     void schedule(TaskPriority priority, std::function<void()> task);
 
+    [[nodiscard]] std::vector<std::exception_ptr> GetExceptions();
+
     ~TaskDispatcher();
 
 private:
     std::shared_ptr<queue::PriorityQueue> priorityQueue_;
-    thread_pool::ThreadPool thread_pool_;
+    std::unique_ptr<thread_pool::ThreadPool> thread_pool_;
 };
 
 }  // namespace dispatcher

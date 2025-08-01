@@ -3,6 +3,8 @@
 #include "task_dispatcher.hpp"
 #include "test_utils.hpp"
 
+#include <set>
+
 using namespace dispatcher;
 using namespace test_utils;
 
@@ -49,8 +51,8 @@ TEST_F(TaskDispatcherTest, MultipleTasksExecution) {
     // Ждем выполнения всех задач с таймаутом
     {
         std::unique_lock<std::mutex> lock(m);
-        const int timeout = 20;
-        const bool success = cv.wait_for(lock, std::chrono::seconds(timeout), [&]() {
+        const int timeout = 100;
+        const bool success = cv.wait_for(lock, std::chrono::milliseconds(timeout), [&]() {
             return allTasksCompleted.load(std::memory_order_acquire);  // Используем acquire
         });
 
@@ -64,81 +66,98 @@ TEST_F(TaskDispatcherTest, MultipleTasksExecution) {
     EXPECT_TRUE(allTasksCompleted.load(std::memory_order_acquire)) << "Not all tasks were completed";
 }
 
-TEST_F(TaskDispatcherTest, ShutdownTest) {
+TEST_F(TaskDispatcherTest, ShutdownDuringExecutionTest) {
     std::atomic<int> task_counter = 0;
-    std::atomic<bool> shutdown_flag{false};  // Инициализируем атомарный флаг
+    std::atomic<bool> tasks_started{false};
 
-    // Переменные для отслеживания начала выполнения задач
-    std::condition_variable task_start_cv;
-    std::mutex task_start_m;
-    int started_tasks = 0;
+    std::condition_variable task_completion_cv;
+    std::mutex task_completion_m;
     const int total_tasks = 5;
+    const int timeout = 100;
 
-    // Планируем несколько задач
+    // Планируем задачи
     for (int i = 0; i < total_tasks; ++i) {
         dispatcher_->schedule(TaskPriority::Normal, [&]() {
-            // Сигнализируем, что задача начала выполняться
             {
-                std::lock_guard<std::mutex> lock(task_start_m);
-                started_tasks++;
-                task_start_cv.notify_one();
+                std::lock_guard<std::mutex> lock(task_completion_m);
+                tasks_started = true;
+                task_completion_cv.notify_one();
             }
 
-            // Имитируем некоторую работу
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // Имитируем длительную работу
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
             task_counter++;
 
-            // Проверяем, что shutdown не произошел во время выполнения
-            EXPECT_FALSE(shutdown_flag.load(std::memory_order_acquire));
-        });
-    }
-
-    // Ждем, пока все задачи начнут выполняться
-    {
-        std::unique_lock<std::mutex> lock(task_start_m);
-        const int timeout = 20;
-        bool success =
-            task_start_cv.wait_for(lock, std::chrono::seconds(timeout), [&]() { return started_tasks == total_tasks; });
-
-        EXPECT_TRUE(success) << "Not all tasks started within the time limit";
-    }
-
-    // Ждем фактического завершения всех задач
-    {
-        std::condition_variable completion_cv;
-        std::mutex completion_m;
-        std::atomic<bool> all_tasks_completed{false};  // Используем атомарный флаг
-
-        // Добавляем задачу проверки завершения
-        dispatcher_->schedule(TaskPriority::High, [&]() {
-            // Ждем, пока все задачи завершатся
-            while (task_counter.load(std::memory_order_acquire) < total_tasks) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // Сигнализируем о завершении задачи
+            {
+                std::lock_guard<std::mutex> lock(task_completion_m);
+                task_completion_cv.notify_one();
             }
-
-            std::lock_guard<std::mutex> lock(completion_m);
-            all_tasks_completed.store(true, std::memory_order_release);
-            completion_cv.notify_one();
         });
+    }
 
-        // Ждем завершения всех задач с таймаутом
-        std::unique_lock<std::mutex> lock(completion_m);
-        bool success = completion_cv.wait_for(lock, std::chrono::seconds(20),
-                                              [&]() { return all_tasks_completed.load(std::memory_order_acquire); });
+    // Ждем, пока хотя бы одна задача начнет выполняться
+    {
+        std::unique_lock<std::mutex> lock(task_completion_m);
+
+        bool success = task_completion_cv.wait_for(lock, std::chrono::microseconds(timeout),
+                                                   [&]() { return tasks_started.load(); });
+        EXPECT_TRUE(success) << "Tasks did not start within the time limit";
+    }
+
+    // Уничтожаем диспетчер в отдельном потоке
+    dispatcher_.reset();
+    // Ждем завершения всех задач
+    {
+        std::unique_lock<std::mutex> lock(task_completion_m);
+        bool success = true;
+
+        for (int i = 0; i < total_tasks; ++i) {
+            success = task_completion_cv.wait_for(lock, std::chrono::microseconds(timeout),
+                                                  [&]() { return task_counter.load() == total_tasks; });
+
+            if (!success)
+                break;
+        }
 
         EXPECT_TRUE(success) << "Tasks did not complete within the time limit";
     }
 
-    // Теперь можно безопасно выполнить shutdown
-    {
-        std::unique_ptr<TaskDispatcher> local_dispatcher = std::move(dispatcher_);
-        shutdown_flag.store(true, std::memory_order_release);
+    // Проверяем результаты
+    EXPECT_EQ(task_counter, total_tasks) << "Not all tasks were executed";
+}
+
+TEST(TaskDispatcherReThowTest, TaskDispatcherReThowTest) {
+    try {
+        TaskDispatcher(std::thread::hardware_concurrency(), queue::QueueOptions{true, 1000},
+                       queue::QueueOptions{true, 0});
+    } catch (const std::invalid_argument &e) {
+        ASSERT_EQ(std::string(e.what()), "Capacity must be specified for bounded queue");
+    }
+}
+
+TEST_F(TaskDispatcherTest, TestGetExceptions) {
+    const std::string expected_error_message = "Test exception";
+    // Планируем задачи, которые выбросят исключения
+    for (int i = 0; i < 3; ++i) {
+        dispatcher_->schedule(TaskPriority::Normal, [&]() { throw std::runtime_error(expected_error_message); });
     }
 
-    // Проверяем, что все задачи были выполнены
-    EXPECT_EQ(task_counter, total_tasks) << "Not all tasks were executed";
+    // Ждем некоторое время, чтобы задачи успели выполниться
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Проверяем, что флаг shutdown установлен
-    EXPECT_TRUE(shutdown_flag.load(std::memory_order_acquire)) << "Shutdown flag was not set";
+    // Получаем исключения
+    auto exceptions = dispatcher_->GetExceptions();
+
+    // Проверяем, что получили хотя бы одно исключение
+    EXPECT_TRUE(!exceptions.empty()) << "No exceptions were captured";
+
+    for (auto &exception : exceptions)
+        CheckExceptionMessage(exception, expected_error_message);
+
+    // Проверяем, что после очистки исключений массив пуст
+    auto empty_exceptions = dispatcher_->GetExceptions();
+    EXPECT_TRUE(empty_exceptions.empty()) << "Exceptions were not cleared";
 }
+
 // здесь ваш код

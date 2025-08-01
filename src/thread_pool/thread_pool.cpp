@@ -24,12 +24,27 @@ ThreadPool::~ThreadPool() {
 
 void ThreadPool::RunTasks() {
     while (true) {
-        auto task = queue_->pop();
-        if (!task.has_value()) {
-            break;  // // Завершаем работу, если получили nullopt
+        try {
+            auto task = queue_->pop();
+            if (!task.has_value()) {
+                break;  // // Завершаем работу, если получили nullopt
+            }
+            std::invoke(task.value());
+        } catch (const std::exception &e) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            exceptions_.push_back(std::current_exception());
+            return;
         }
-        std::invoke(task.value());
     }
+}
+
+std::vector<std::exception_ptr> ThreadPool::GetAndClearExceptions() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (exceptions_.empty())
+        return {};
+    std::vector<std::exception_ptr> temp = std::move(exceptions_);
+    exceptions_.clear();
+    return temp;
 }
 
 }  // namespace dispatcher::thread_pool

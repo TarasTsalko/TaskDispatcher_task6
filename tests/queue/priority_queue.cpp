@@ -154,4 +154,23 @@ TEST_F(PriorityQueueTest, MultiThreadedPriorityOrder) {
     }
 }
 
+TEST(TestExceptionPropagation, TestExceptionPropagation) {
+    // Некорректные параметры для проверки исключения
+    queue::QueueOptions highPriorityOption{true, 0};  // capacity = 0 вызовет исключение
+    queue::QueueOptions normalPriorityOption{false};
+
+    // Запускаем создание очереди в отдельном потоке
+    std::exception_ptr exception;
+    std::thread workerThread([&]() {
+        // Попытка создания PriorityQueue
+        PriorityQueue queue(highPriorityOption, normalPriorityOption);
+        exception = queue.GetAndClearException();
+    });
+
+    workerThread.join();
+
+    ASSERT_NE(exception, nullptr);
+    ASSERT_TRUE(CheckExceptionMessage(exception, "Capacity must be specified for bounded queue"));
+}
+
 // здесь ваш код
